@@ -111,7 +111,7 @@ write-host ("`nChecking KRBTGT`n") -ForegroundColor Cyan
 $now = get-date
 $krbtgtlch =  (get-aduser -identity krbtgt -properties passwordlastset).passwordlastset 
 if ((New-TimeSpan -Start $krbtgtlch -End $now).days -lt 180) {
-	write-host "[X] All good" -ForegroundColor Green
+	write-host "[X] KRBTGT password was changed less than 180 days ago." -ForegroundColor Green
 } else {
 	write-host "[ ] KRBTGT password was changed more than 180 days ago." -ForegroundColor Red
 }
