@@ -9,7 +9,7 @@ param (
 
 $dt=get-date -format yyyy-MM-DD-hhmmss
 
-$null = Start-Transcript -Path .\Check-Tier0-$dt.log -NoClobber -UseMinimalHeader
+$null = Start-Transcript -Path .\Check-Tier0-$dt.log -NoClobber
 
 function CheckTrusts {
     write-host ("`nChecking Trusts`n") -ForegroundColor Cyan
