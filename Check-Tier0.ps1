@@ -7,18 +7,27 @@ param (
     $allInfo
 )
 
+$dt=get-date -format yyyy-MM-DD-hhmmss
+
+$null = Start-Transcript -Path .\Check-Tier0-$dt.log -NoClobber -UseMinimalHeader
+
 function CheckTrusts {
     write-host ("`nChecking Trusts`n") -ForegroundColor Cyan
     $trusts = Get-ADTrust -Filter * -Properties whenchanged
-    foreach ($trust in $trusts) {
-        $now = get-date
-        $trustchanged =  (Get-ADTrust -Filter * -Properties whenchanged).whenchanged
-        if ((New-TimeSpan -Start $trustchanged -End $now).days -lt 45) {
-            write-host "[X] Trust password for" $trust.target "was last changed in less than 45 days. All good!" -ForegroundColor Green
-        } else {
-            write-host "[ ] Trust password for $trust.name was not changed in more than 45 days." -ForegroundColor Red
-        }       
-    } 
+    if ($trusts) {
+        foreach ($trust in $trusts) {
+            $now = get-date
+            $trustchanged =  (Get-ADTrust -identity $trust.name -Properties whenchanged).whenchanged
+            if ((New-TimeSpan -Start $trustchanged -End $now).days -lt 45) {
+                write-host "[X] Trust password for" $trust.target "was last changed in less than 45 days. All good!" -ForegroundColor Green
+            } else {
+                write-host "[ ] Trust password for $trust.name was not changed in more than 45 days." -ForegroundColor Red
+            }       
+        }
+    } else {
+        write-host ("No trusts were found in this domain.") -ForegroundColor Green
+    }
+
 }
 Function ADObjectswithStaleAdminCount{
     #users_with_admincount
@@ -75,12 +84,13 @@ Import-Module ActiveDirectory
 write-host ("`nChecking Tiering model`n") -ForegroundColor Cyan
 try {
 	$null = Get-ADGroup -Identity "tier0admins"
+    $null = Get-ADGroup -Identity "tier0servers"
 	write-host ("[X] Tier model is in place") -ForegroundColor Green
     if (Get-ADGroupMember -Identity "Domain Admins" | ? {$_.distinguishedName -like "*Tier 0 Admins*"}) {
         write-host ("[X] Tier 0 Admins are member of Domain Admins") -ForegroundColor Green
     }
     } catch {
-        write-host ("[ ] Tier model is not deployed") -ForegroundColor Red
+        write-host ("[ ] Tier model is not properly deployed!") -ForegroundColor Red
 }
 
 ## Checking AccountsRestrictions
@@ -175,7 +185,31 @@ foreach ($group in $allgroups) {
     $AllTier0UsersDN += (Get-ADGroupMember -Identity $grpdn -recursive).distinguishedname
 }
 
+Write-Host "`nChecking Tier 0 Servers`n" -ForegroundColor Cyan
+if (Get-childitem "AD:\CN=Certification Authorities,CN=Public Key Services,CN=Services,CN=Configuration,*" ) {
+    write-host ("[!] You have PKI deployed in this domain. Make sure that PKI servers are moved to the appropriate OU and added to the Tier0Servers Group.") -ForegroundColor Yellow 
+}
+if (get-aduser -Filter * | ? {$_.name -like 'MSOL_*'}) {
+    write-host ("[!] You have Azure AD Connect deployed in this domain. Make sure that AADCon servers are moved to the appropriate OU and added to the Tier0Servers Group.") -ForegroundColor Yellow 
+}
+if (get-adcomputer -Filter * | ? {$_.name -like '*ADFS*'}) {
+    write-host ("[!] You probably have ADFS deployed in this domain. Make sure that ADFS servers are moved to the appropriate OU and added to the Tier0Servers Group.") -ForegroundColor Yellow 
+}
+
+
 $allusers = $AllTier0UsersDN | Sort-Object | Get-Unique
+
+Write-Host "`nChecking Tier 0 Users`n" -ForegroundColor Cyan
+$allT0Accounts = (Get-AdGroupMember "Tier0Accounts" -Recursive).distinguishedname
+foreach ($user in $allusers) {
+    if ($user -in $allT0Accounts) {
+        write-host ("[X] $user is reckognized as a Tier 0 user and is member of Tier 0 Accounts Group") -ForegroundColor Green
+    } else {
+        write-host ("[ ] $user is reckognized as a Tier 0 user but it is NOT member of Tier 0 Accounts Group") -ForegroundColor Red
+    }
+}
+
+
 
 if ($allInfo) {
     Write-Host "`nThese groups are recognized as a Tier 0 Groups `n"  -ForegroundColor Green
@@ -204,59 +238,71 @@ foreach ($group in $allgroups) {
         $needsCleanUp += 1
         Write-Host "`n$group - This group should have only 1 member - Tier 0 Admins Group." -ForegroundColor Red
         foreach ($member in $members)  {
-            Write-Host "`t["($member.objectclass).substring(0,1).toupper()"]" $member.distinguishedname
-        }      
+            if ($member.distinguishedname -like "*Tier 0 Admins,*") {
+                Write-Host "`t["($member.objectclass).substring(0,1).toupper()"]" $member.distinguishedname
+            } else {
+                Write-Host "`t["($member.objectclass).substring(0,1).toupper()"]" $member.distinguishedname -ForegroundColor Yellow
+            }
+            
+        }   
     } 
     if ($group -like "*CN=Administrators*" -and ($members | measure-object).count -gt 3){
         $needsCleanUp += 1
-        Write-Host "`n$group - This group should have only 3 members - Domain Admins, Enterprise Admins and Break Glass account." -ForegroundColor Red
+        Write-Host "`n$group - This group should have only 3 members - DA, EA and Break Glass account." -ForegroundColor Red
         foreach ($member in $members)  {
-            Write-Host "`t["($member.objectclass).substring(0,1).toupper()"]" $member.distinguishedname
-        }      
+            if ($member.distinguishedname -like "*Domain Admins,*" -or $member.distinguishedname -like "*Enterprise Admins,*") {
+                Write-Host "`t["($member.objectclass).substring(0,1).toupper()"]" $member.distinguishedname
+            } else {
+                Write-Host "`t["($member.objectclass).substring(0,1).toupper()"]" $member.distinguishedname -ForegroundColor Yellow
+            }
+            
+        }       
     } 
     if ($group -like "*CN=Enterprise Admins*" -and ($members | measure-object).count -gt 0){
         $needsCleanUp += 1
         Write-Host "`n$group - This group should be empty." -ForegroundColor Red
         foreach ($member in $members)  {
-            Write-Host "`t["($member.objectclass).substring(0,1).toupper()"]" $member.distinguishedname
-        }      
+            Write-Host "`t["($member.objectclass).substring(0,1).toupper()"]" $member.distinguishedname -ForegroundColor Yellow
+        }        
     } 
     if ($group -like "*CN=Schema Admins*" -and ($members | measure-object).count -gt 0){
         $needsCleanUp += 1
         Write-Host "`n$group - This group should be empty." -ForegroundColor Red
         foreach ($member in $members)  {
-            Write-Host "`t["($member.objectclass).substring(0,1).toupper()"]" $member.distinguishedname
+            Write-Host "`t["($member.objectclass).substring(0,1).toupper()"]" $member.distinguishedname -ForegroundColor Yellow
         }      
     } 
     if ($group -like "*CN=Account Operators*" -and ($members | measure-object).count -gt 0){
         $needsCleanUp += 1
         Write-Host "`n$group - This group should be empty." -ForegroundColor Red
         foreach ($member in $members)  {
-            Write-Host "`t["($member.objectclass).substring(0,1).toupper()"]" $member.distinguishedname
+            Write-Host "`t["($member.objectclass).substring(0,1).toupper()"]" $member.distinguishedname -ForegroundColor Yellow
         }      
     } 
     if ($group -like "*CN=Backup Operators*" -and ($members | measure-object).count -gt 0){
         $needsCleanUp += 1
         Write-Host "`n$group - This group should be empty." -ForegroundColor Red
         foreach ($member in $members)  {
-            Write-Host "`t["($member.objectclass).substring(0,1).toupper()"]" $member.distinguishedname
+            Write-Host "`t["($member.objectclass).substring(0,1).toupper()"]" $member.distinguishedname -ForegroundColor Yellow
         }      
     } 
     if ($group -like "*CN=Print Operators*" -and ($members | measure-object).count -gt 0){
         $needsCleanUp += 1
         Write-Host "`n$group - This group should be empty." -ForegroundColor Red
         foreach ($member in $members)  {
-            Write-Host "`t["($member.objectclass).substring(0,1).toupper()"]" $member.distinguishedname
+            Write-Host "`t["($member.objectclass).substring(0,1).toupper()"]" $member.distinguishedname -ForegroundColor Yellow
         }      
     } 
     if ($group -like "*CN=Server Operators*" -and ($members | measure-object).count -gt 0){
         $needsCleanUp += 1
         Write-Host "`n$group - This group should be empty." -ForegroundColor Red
         foreach ($member in $members)  {
-            Write-Host "`t["($member.objectclass).substring(0,1).toupper()"]" $member.distinguishedname
+            Write-Host "`t["($member.objectclass).substring(0,1).toupper()"]" $member.distinguishedname -ForegroundColor Yellow
         }      
-    }
+    } 
 }
 if ($needsCleanUp -eq 0) {
     Write-Host "`nNothing.. CONGRATULATIONS.. you did your job!`n" -ForegroundColor Green
 }
+
+$null = Stop-Transcript
