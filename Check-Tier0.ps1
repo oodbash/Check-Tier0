@@ -186,7 +186,7 @@ foreach ($group in $allgroups) {
 }
 
 Write-Host "`nChecking Tier 0 Servers`n" -ForegroundColor Cyan
-if (Get-childitem "AD:\CN=Certification Authorities,CN=Public Key Services,CN=Services,CN=Configuration,*" ) {
+if (Get-childitem "AD:\CN=Certification Authorities,CN=Public Key Services,CN=Services,CN=Configuration,*" | ? {$_.objectclass -ne "container"}) {
     write-host ("[!] You have PKI deployed in this domain. Make sure that PKI servers are moved to the appropriate OU and added to the Tier0Servers Group.") -ForegroundColor Yellow 
 }
 if (get-aduser -Filter * | ? {$_.name -like 'MSOL_*'}) {
