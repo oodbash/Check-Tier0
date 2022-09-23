@@ -88,8 +88,8 @@ PROCESS {
         }
         
         Write-Host "Granting LAPS permissions on" $OU.name "for" $grp_name -ForegroundColor Yellow
-        $null = Set-AdmPwdReadPasswordPermission -OrgUnit $OU.name -AllowedPrincipals $grp_name
-        $null = Set-AdmPwdResetPasswordPermission -OrgUnit $OU.name -AllowedPrincipals $grp_name
+        $null = Set-AdmPwdReadPasswordPermission -OrgUnit $OU.DistinguishedName -AllowedPrincipals $grp_name
+        $null = Set-AdmPwdResetPasswordPermission -OrgUnit $OU.DistinguishedName -AllowedPrincipals $grp_name
 
     }
 
