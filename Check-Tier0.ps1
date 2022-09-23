@@ -3,6 +3,9 @@ param (
     [string]
     $tier0groups,
     [Parameter(Mandatory = $false)]
+    [string]
+    $breakGlassAccount,
+    [Parameter(Mandatory = $false)]
     [switch]
     $allInfo
 )
@@ -79,6 +82,11 @@ Function ADObjectswithStaleAdminCount{
 }
 
 Import-Module ActiveDirectory
+
+
+if ($breakGlassAccount) {
+    $bga=(get-aduser -identity $breakGlassAccount).distinguishedName
+} else {$bga = "xyz"}
 
 ## Checking Tiering model
 write-host ("`nChecking Tiering model`n") -ForegroundColor Cyan
@@ -202,9 +210,9 @@ $allusers = $AllTier0UsersDN | Sort-Object | Get-Unique
 Write-Host "`nChecking Tier 0 Users`n" -ForegroundColor Cyan
 $allT0Accounts = (Get-AdGroupMember "Tier0Accounts" -Recursive).distinguishedname
 foreach ($user in $allusers) {
-    if ($user -in $allT0Accounts) {
+    if (($user -in $allT0Accounts) -and ($user -notmatch $bga)) {
         write-host ("[X] $user is reckognized as a Tier 0 user and is member of Tier 0 Accounts Group") -ForegroundColor Green
-    } else {
+    } elseif (($user -notin $allT0Accounts) -and ($user -notmatch $bga)) {
         write-host ("[ ] $user is reckognized as a Tier 0 user but it is NOT member of Tier 0 Accounts Group") -ForegroundColor Red
     }
 }
