@@ -1,3 +1,33 @@
+    <#
+    .SYNOPSIS
+    Check if Tier 0 model is properly deployed
+    .DESCRIPTION
+    Author: Vladimir Mutić
+    Version 0.9
+
+    This script will go through Tier 0 configuration and check if it is applied properly
+
+    .PARAMETER tier0groups (OPTIONAL)
+    You can specify list of additional Tier 0 groups specific to your org. Specify the full source path to the CSV file i.e c:\temp\Tier0Groups.csv with DNs of your groups.
+    CSV need to have DN column defined
+    .EXAMPLE
+    .\Check-Tier0.ps1 -tier0groups c:\temp\Tier0Groups.csv
+    .PARAMETER breakGlassAccount (OPTIONAL)
+    You should provide DN of break glass account. This will allow script to correctly identify this accounts within reports.
+    .EXAMPLE
+    .\Check-Tier0.ps1 -breakGlassAccount "CN=bga,CN=Users,DC=contoso,DC=com"
+    .PARAMETER allInfo (OPTIONAL)
+    If this parameter is specified, script will provide detailed info regarding all Tier 0 users and groups
+    .EXAMPLE
+    .\Check-Tier0.ps1 -allInfo
+
+    .DISCLAIMER
+    All scripts and other powershell references are offered AS IS with no warranty.
+    These script and functions are tested in my environment and it is recommended that you test these scripts in a test environment before using in your production environment.
+    #>
+
+
+
 param (
     [Parameter(Mandatory = $false)]
     [string]
@@ -9,6 +39,23 @@ param (
     [switch]
     $allInfo
 )
+
+
+
+#Checks if the user is in the administrator group. Warns and stops if the user is not.
+If (-NOT ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(`
+    [Security.Principal.WindowsBuiltInRole] "Administrator"))
+{
+    Write-Warning "You are not running this as local administrator. Run it again in an elevated prompt."
+    Break
+}
+try {
+    Import-Module ActiveDirectory
+}
+catch {
+    Write-Warning "The Active Directory module was not found"
+}
+
 
 $dt=get-date -format yyyy-MM-DD-hhmmss
 
@@ -30,8 +77,8 @@ function CheckTrusts {
     } else {
         write-host ("No trusts were found in this domain.") -ForegroundColor Green
     }
-
 }
+
 Function ADObjectswithStaleAdminCount{
     #users_with_admincount
     [cmdletbinding()]
@@ -45,7 +92,7 @@ Function ADObjectswithStaleAdminCount{
         
         #users with stale admin count
         $results = @();$orphan_results = @();$non_orphan_results  = @()
-        $flagged_object = foreach($domain in (get-adforest).domains)
+        $flagged_object = foreach($domain in (get-addomain).dnsroot)
             {get-adobject -filter 'admincount -eq 1 -and iscriticalsystemobject -notlike "*"' `
                     -server $domain `
                     -properties whenchanged,whencreated,admincount,isCriticalSystemObject,"msDS-ReplAttributeMetaData",samaccountname |`
@@ -53,7 +100,7 @@ Function ADObjectswithStaleAdminCount{
                     SamAccountName,objectclass,isCriticalSystemObject,@{name='adminCountDate';expression={($_ | `
                         Select-Object -ExpandProperty "msDS-ReplAttributeMetaData" | foreach {([XML]$_.Replace("`0","")).DS_REPL_ATTR_META_DATA |`
                         where { $_.pszAttributeName -eq "admincount"}}).ftimeLastOriginatingChange | get-date -Format MM/dd/yyyy}}}
-        $default_admin_groups = foreach($domain in (get-adforest).domains){get-adgroup -filter 'admincount -eq 1 -and iscriticalsystemobject -like "*"'`
+        $default_admin_groups = foreach($domain in (get-addomain).dnsroot){get-adgroup -filter 'admincount -eq 1 -and iscriticalsystemobject -like "*"'`
                     -server $domain | select @{name='Domain';expression={$domain}},distinguishedname}
         foreach($object in $flagged_object){
             $udn = ($object).distinguishedname
@@ -81,12 +128,9 @@ Function ADObjectswithStaleAdminCount{
     }
 }
 
-Import-Module ActiveDirectory
-
-
 if ($breakGlassAccount) {
     $bga=(get-aduser -identity $breakGlassAccount).distinguishedName
-} else {$bga = "xyz"}
+} else {$bga = "unknownBreakGlassAccount"}
 
 ## Checking Tiering model
 write-host ("`nChecking Tiering model`n") -ForegroundColor Cyan
@@ -118,7 +162,7 @@ if ($link) {
         0 {write-host ("[ ] Policy link is enabled but not enforced!") -ForegroundColor Red}
         1 {write-host ("[ ] Policy link is nor enabled or enforced!") -ForegroundColor Red}
         2 {write-host ("[X] Policy link is enabled and enforced!") -ForegroundColor Green}
-        3 {write-host ("[ ] Policy link is not enabled but it is enforced!") -ForegroundColor Red}
+        3 {write-host ("[ ] Policy link is enforced but it is not enabled!") -ForegroundColor Red}
     } 
 } else {
     write-host ("[ ] AccountsRestrictions policy is not linked to the ROOT of the domain!") -ForegroundColor Red
@@ -258,7 +302,7 @@ foreach ($group in $allgroups) {
         $needsCleanUp += 1
         Write-Host "`n$group - This group should have only 3 members - DA, EA and Break Glass account." -ForegroundColor Red
         foreach ($member in $members)  {
-            if ($member.distinguishedname -like "*Domain Admins,*" -or $member.distinguishedname -like "*Enterprise Admins,*") {
+            if ($member.distinguishedname -like "*Domain Admins,*" -or $member.distinguishedname -like "*Enterprise Admins,*" -or $member.distinguishedname -like "*$bga*") {
                 Write-Host "`t["($member.objectclass).substring(0,1).toupper()"]" $member.distinguishedname
             } else {
                 Write-Host "`t["($member.objectclass).substring(0,1).toupper()"]" $member.distinguishedname -ForegroundColor Yellow
