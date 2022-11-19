@@ -121,7 +121,7 @@ Function ADObjectswithStaleAdminCount{
         $non_orphan_results | export-csv $default_log -NoTypeInformation
         $orphan_results | export-csv $orphan_log -NoTypeInformation
         if($orphan_results){
-            write-host "[ ] Found $(($orphan_results | measure).count) stale admin objects (admincount attribute set to 1 and inheritance disabled). Please run FixAdminCount1.ps1 script." -ForegroundColor Red
+            write-host "[ ] Found $(($orphan_results | Measure-Object).count) stale admin objects (admincount attribute set to 1 and inheritance disabled). Please run FixAdminCount1.ps1 script." -ForegroundColor Red
         }else{
             write-host "[X] Found 0 Objects with Stale Admin Count" -ForegroundColor Green
         }
@@ -138,7 +138,7 @@ try {
 	$null = Get-ADGroup -Identity "tier0admins"
     $null = Get-ADGroup -Identity "tier0servers"
 	write-host ("[X] Tier model is in place") -ForegroundColor Green
-    if (Get-ADGroupMember -Identity "Domain Admins" | ? {$_.distinguishedName -like "*Tier 0 Admins*"}) {
+    if (Get-ADGroupMember -Identity "Domain Admins" | Where-Object {$_.distinguishedName -like "*Tier 0 Admins*"}) {
         write-host ("[X] Tier 0 Admins are member of Domain Admins") -ForegroundColor Green
     }
     } catch {
@@ -149,7 +149,7 @@ try {
 write-host ("`nChecking AccountsRestrictions GPO`n") -ForegroundColor Cyan
 $root = (Get-ADObject -Identity (Get-ADDomain).distinguishedName -Properties name, distinguishedName, gPLink, gPOptions).gplink 
 
-$arguid = (get-gpo -all | ? {$_.DisplayName -like "*AccountsRestriction*"}).id
+$arguid = (get-gpo -all | Where-Object {$_.DisplayName -like "*AccountsRestriction*"}).id
 
 $link = $root -split ("]") -match $arguid
 
