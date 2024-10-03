@@ -37,7 +37,10 @@ param (
     $breakGlassAccount,
     [Parameter(Mandatory = $false)]
     [switch]
-    $allInfo
+    $allInfo,
+    [Parameter(Mandatory = $false)]
+    [switch]
+    $checkTierModel
 )
 
 
@@ -128,44 +131,75 @@ Function ADObjectswithStaleAdminCount{
     }
 }
 
+## Checking iportant accounts
+write-host ("`nChecking important accounts`n") -ForegroundColor Cyan
 if ($breakGlassAccount) {
     $bga=(get-aduser -identity $breakGlassAccount).distinguishedName
+    write-host ("[X] Break Glass Account is defined as $bga") -ForegroundColor Green
 } else {$bga = "unknownBreakGlassAccount"}
+## check default administrator account (sid-500), current name (if it was renamed) and if it is enabled
 
-## Checking Tiering model
-write-host ("`nChecking Tiering model`n") -ForegroundColor Cyan
-try {
-	$null = Get-ADGroup -Identity "tier0admins"
-    $null = Get-ADGroup -Identity "tier0servers"
-	write-host ("[X] Tier model is in place") -ForegroundColor Green
-    if (Get-ADGroupMember -Identity "Domain Admins" | Where-Object {$_.distinguishedName -like "*Tier 0 Admins*"}) {
-        write-host ("[X] Tier 0 Admins are member of Domain Admins") -ForegroundColor Green
-    }
-    } catch {
-        write-host ("[ ] Tier model is not properly deployed!") -ForegroundColor Red
-}
+# Retrieve the Administrator user by SID
+$adminUser = Get-ADUser -filter * | ? { $_.SID -like "S-1-5-21-*-500" }
 
-## Checking AccountsRestrictions
-write-host ("`nChecking AccountsRestrictions GPO`n") -ForegroundColor Cyan
-$root = (Get-ADObject -Identity (Get-ADDomain).distinguishedName -Properties name, distinguishedName, gPLink, gPOptions).gplink 
-
-$arguid = (get-gpo -all | Where-Object {$_.DisplayName -like "*AccountsRestriction*"}).id
-
-$link = $root -split ("]") -match $arguid
-
-if ($link) {
-	write-host ("[X] AccountsRestrictions policy is linked to the ROOT of the domain!") -ForegroundColor Green
-
-    $linkstatus = $link -replace '^.*(?=.{1}$)'
-
-    switch ($linkstatus) {
-        0 {write-host ("[ ] Policy link is enabled but not enforced!") -ForegroundColor Red}
-        1 {write-host ("[ ] Policy link is nor enabled or enforced!") -ForegroundColor Red}
-        2 {write-host ("[X] Policy link is enabled and enforced!") -ForegroundColor Green}
-        3 {write-host ("[ ] Policy link is enforced but it is not enabled!") -ForegroundColor Red}
+# Extract the required properties
+$da = $adminUser.DistinguishedName
+$daEnabled = $adminUser.Enabled
+write-host ("[X] Default Administrator account is $da") -ForegroundColor Green
+if ($daEnabled) {
+    write-host ("[X] Default Administrator account is enabled") -ForegroundColor Green
+    if ($breakGlassAccount) {
+        if ($bga -ne $da) {
+            write-host ("[ ] You have separate Break Glass Account, so you should disable default Administrator account.") -ForegroundColor Yellow
+        } else {
+            write-host ("[X] Break Glass Account is the same as Default Administrator account") -ForegroundColor Green
+            $bga = $da
+        }
     } 
 } else {
-    write-host ("[ ] AccountsRestrictions policy is not linked to the ROOT of the domain!") -ForegroundColor Red
+    write-host ("[ ] Default Administrator account is disabled") -ForegroundColor Red
+    if (!$breakGlassAccount) {
+        write-host ("[ ] You didn't provide name of Break Glass Account. Make sure that you have one in case of emergency.") -ForegroundColor Yellow
+    } 
+}
+
+
+## Checking Tiering model
+if ($checkTierModel) {
+    write-host ("`nChecking Tiering model`n") -ForegroundColor Cyan
+    try {
+        $null = Get-ADGroup -Identity "tier0admins"
+        $null = Get-ADGroup -Identity "tier0servers"
+        write-host ("[X] Tier model is in place") -ForegroundColor Green
+        if (Get-ADGroupMember -Identity "Domain Admins" | Where-Object {$_.distinguishedName -like "*Tier 0 Admins*"}) {
+            write-host ("[X] Tier 0 Admins are member of Domain Admins") -ForegroundColor Green
+        }
+        } catch {
+            write-host ("[ ] Tier model is not properly deployed!") -ForegroundColor Red
+    }
+
+    ## Checking AccountsRestrictions
+    write-host ("`nChecking AccountsRestrictions GPO`n") -ForegroundColor Cyan
+    $root = (Get-ADObject -Identity (Get-ADDomain).distinguishedName -Properties name, distinguishedName, gPLink, gPOptions).gplink 
+
+    $arguid = (get-gpo -all | Where-Object {$_.DisplayName -like "*AccountsRestriction*"}).id
+
+    $link = $root -split ("]") -match $arguid
+
+    if ($link) {
+        write-host ("[X] AccountsRestrictions policy is linked to the ROOT of the domain!") -ForegroundColor Green
+
+        $linkstatus = $link -replace '^.*(?=.{1}$)'
+
+        switch ($linkstatus) {
+            0 {write-host ("[ ] Policy link is enabled but not enforced!") -ForegroundColor Red}
+            1 {write-host ("[ ] Policy link is nor enabled or enforced!") -ForegroundColor Red}
+            2 {write-host ("[X] Policy link is enabled and enforced!") -ForegroundColor Green}
+            3 {write-host ("[ ] Policy link is enforced but it is not enabled!") -ForegroundColor Red}
+            } 
+    } else {
+        write-host ("[ ] AccountsRestrictions policy is not linked to the ROOT of the domain!") -ForegroundColor Red
+    }
 }
 
 ## Checking KRBTGT
@@ -237,31 +271,27 @@ foreach ($group in $allgroups) {
     $AllTier0UsersDN += (Get-ADGroupMember -Identity $grpdn -recursive).distinguishedname
 }
 
-Write-Host "`nChecking Tier 0 Servers`n" -ForegroundColor Cyan
+Write-Host "`nChecking additional Tier 0 Servers (beside DCs)`n" -ForegroundColor Cyan
+$additionalTier0Servers = 0
 if (Get-childitem "AD:\CN=Certification Authorities,CN=Public Key Services,CN=Services,CN=Configuration,*" | ? {$_.objectclass -ne "container"}) {
-    write-host ("[!] You have PKI deployed in this domain. Make sure that PKI servers are moved to the appropriate OU and added to the Tier0Servers Group.") -ForegroundColor Yellow 
+    write-host ("[!] You have PKI deployed in this domain. Make sure that PKI servers are moved to the appropriate OU and added to the Tier0Servers Group.") -ForegroundColor Yellow
+    $additionalTier0Servers +=1 
 }
 if (get-aduser -Filter * | ? {$_.name -like 'MSOL_*'}) {
-    write-host ("[!] You have Azure AD Connect deployed in this domain. Make sure that AADCon servers are moved to the appropriate OU and added to the Tier0Servers Group.") -ForegroundColor Yellow 
+    write-host ("[!] You have Azure AD Connect deployed in this domain. Make sure that AADCon servers are moved to the appropriate OU and added to the Tier0Servers Group.") -ForegroundColor Yellow
+    $additionalTier0Servers +=1  
 }
 if (get-adcomputer -Filter * | ? {$_.name -like '*ADFS*'}) {
     write-host ("[!] You probably have ADFS deployed in this domain. Make sure that ADFS servers are moved to the appropriate OU and added to the Tier0Servers Group.") -ForegroundColor Yellow 
+    $additionalTier0Servers +=1 
+}
+if ($additionalTier0Servers -eq 0) {
+    write-host ("[X] No additional Tier 0 servers found.") -ForegroundColor Green
 }
 
+write-host ("`nChecking Tier 0 Users and Groups") -ForegroundColor Cyan
 
 $allusers = $AllTier0UsersDN | Sort-Object | Get-Unique
-
-Write-Host "`nChecking Tier 0 Users`n" -ForegroundColor Cyan
-$allT0Accounts = (Get-AdGroupMember "Tier0Accounts" -Recursive).distinguishedname
-foreach ($user in $allusers) {
-    if (($user -in $allT0Accounts) -and ($user -notmatch $bga)) {
-        write-host ("[X] $user is reckognized as a Tier 0 user and is member of Tier 0 Accounts Group") -ForegroundColor Green
-    } elseif (($user -notin $allT0Accounts) -and ($user -notmatch $bga)) {
-        write-host ("[ ] $user is reckognized as a Tier 0 user but it is NOT member of Tier 0 Accounts Group") -ForegroundColor Red
-    }
-}
-
-
 
 if ($allInfo) {
     Write-Host "`nThese groups are recognized as a Tier 0 Groups `n"  -ForegroundColor Green
@@ -280,17 +310,40 @@ if ($allInfo) {
     }
 }
 
+if ($checkTierModel) {
+    Write-Host "`nChecking Tier 0 Users`n" -ForegroundColor Cyan
+    $allT0Accounts = (Get-AdGroupMember "Tier0Accounts" -Recursive).distinguishedname
+    foreach ($user in $allusers) {
+    if (($user -in $allT0Accounts) -and ($user -notmatch $bga)) {
+        write-host ("[X] $user is reckognized as a Tier 0 user and is member of Tier 0 Accounts Group") -ForegroundColor Green
+    } elseif (($user -notin $allT0Accounts) -and ($user -notmatch $bga)) {
+        write-host ("[ ] $user is reckognized as a Tier 0 user but it is NOT member of Tier 0 Accounts Group") -ForegroundColor Red
+    }
+    }
+}
+
+Write-Host "`nChecking Users in Default Users Container`n" -ForegroundColor Cyan
+# Retrieve the actual domain parameter dynamically
+$domain = (Get-ADDomain).DistinguishedName
+
+# Define the default Users container using the actual domain parameter
+$defaultUsersContainer = "CN=Users,$domain"
+foreach ($user in $allUsers) {
+    if ($user -like "*$defaultUsersContainer*") {
+        Write-Host ("[!] $($user) is located in the default Users container. Consider moving it to the Admin OU.") -ForegroundColor Yellow
+    }
+}
 
 Write-Host "`nTier 0 Groups that should be cleaned up" -ForegroundColor Cyan
 $needsCleanUp = 0
 foreach ($group in $allgroups) {
     $members = Get-ADGroupmember -Identity $group
     
-    if ($group -like "*CN=Domain Admins*" -and ($members | measure-object).count -gt 1){
+    if ($group -like "*CN=Domain Admins*" -and ($members | measure-object).count -gt 2){
         $needsCleanUp += 1
-        Write-Host "`n$group - This group should have only 1 member - Tier 0 Admins Group." -ForegroundColor Red
+        Write-Host "`n$group - This group should have only 2 members - Tier 0 Admins Group and Break Glass Account." -ForegroundColor Red
         foreach ($member in $members)  {
-            if ($member.distinguishedname -like "*Tier 0 Admins,*") {
+            if ($member.distinguishedname -like "*Tier 0 Admins,*" -or $member.distinguishedname -like "*$bga*") {
                 Write-Host "`t["($member.objectclass).substring(0,1).toupper()"]" $member.distinguishedname
             } else {
                 Write-Host "`t["($member.objectclass).substring(0,1).toupper()"]" $member.distinguishedname -ForegroundColor Yellow
@@ -298,14 +351,15 @@ foreach ($group in $allgroups) {
             
         }   
     } 
-    if ($group -like "*CN=Administrators*" -and ($members | measure-object).count -gt 3){
-        $needsCleanUp += 1
-        Write-Host "`n$group - This group should have only 3 members - DA, EA and Break Glass account." -ForegroundColor Red
+    if ($group -like "*CN=Administrators*" -and ($members | measure-object).count -gt 2){
+        
+        Write-Host "`n$group - This group should have up to 3 members - Domain Admins, Enterprise Admins groups and optionally, Break Glass Account." -ForegroundColor Red
         foreach ($member in $members)  {
             if ($member.distinguishedname -like "*Domain Admins,*" -or $member.distinguishedname -like "*Enterprise Admins,*" -or $member.distinguishedname -like "*$bga*") {
                 Write-Host "`t["($member.objectclass).substring(0,1).toupper()"]" $member.distinguishedname
             } else {
                 Write-Host "`t["($member.objectclass).substring(0,1).toupper()"]" $member.distinguishedname -ForegroundColor Yellow
+                $needsCleanUp += 1
             }
             
         }       
