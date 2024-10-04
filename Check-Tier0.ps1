@@ -411,4 +411,35 @@ if ($needsCleanUp -eq 0) {
     Write-Host "`nNothing.. CONGRATULATIONS.. you did your job!`n" -ForegroundColor Green
 }
 
+## Check all disabled accounts in domain. Log all disabled users to the file with timestap in the name.
+Write-Host "`nLooking for Disabled Tier 0 users. List of all disabled users can be found in csv file within this directory.`n" -ForegroundColor Cyan
+$disabledUsers = Get-ADUser -Filter {Enabled -eq $false} | Select-Object Name, SamAccountName, DistinguishedName
+$disabledUsers | Export-Csv -Path .\DisabledUsers-$dt.csv -NoTypeInformation
+## Print on screen only disabled users contained in $allUsers
+foreach ($user in $allUsers) {
+    if ($user -in $disabledUsers.DistinguishedName) {
+        write-host ("$user is disabled but still has high privileges.") -ForegroundColor Yellow
+    }
+}
+
+## For each account in $allUsers check they are used in the last 90 days. If not, log them to the file with timestap in the name.
+Write-Host "`nLooking for Tier 0 Users with LastLogonTimeStamp greater than 90 days.`n" -ForegroundColor Cyan
+$now = Get-Date
+$lastLogon = $now.AddDays(-90)
+$inactiveUsers = @()
+foreach ($user in $allUsers) {
+    $lastLogonDate = (Get-ADUser -Identity $user -Properties LastLogonTimeStamp).LastLogonTimeStamp
+    if ($lastLogonDate) {
+        $lastLogonDate = [DateTime]::FromFileTime($lastLogonDate)
+    } else {
+        $lastLogonDate = $null
+    }
+    if ($lastLogonDate -lt $lastLogon) {
+        $inactiveUsers += $user
+    }
+}
+$inactiveUsers
+
+Write-Host "`nThat's all Folks!`n" -ForegroundColor Yellow
+
 $null = Stop-Transcript
